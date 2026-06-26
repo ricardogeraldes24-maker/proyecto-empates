@@ -2,8 +2,11 @@ import time
 import traceback
 from datetime import datetime
 
+from db import ejecutar as db_ejecutar
 from database import crear_tabla, guardar_partido, obtener_partidos_sin_resultado, obtener_partidos_futuros
 from scraper import scrape_fecha, scrape_historial
+from scraper_completo import LIGAS, TEMPORADAS, scrape_tabla
+from db import guardar_standings
 from analyzer import generar_reporte
 from notifier import enviar
 from config import INTERVALO_HORAS, UMBRAL_EMPATE
@@ -65,6 +68,32 @@ def ejecutar_ciclo():
     except Exception as e:
         print(f"Error enviando a Telegram: {e}")
 
+def cargar_standings_si_vacio():
+    try:
+        rows = db_ejecutar("SELECT COUNT(*) FROM standings")
+        if rows and rows[0][0] > 0:
+            print(f"Standings ya cargados: {rows[0][0]} registros")
+            return
+    except Exception as e:
+        print(f"Error verificando standings: {e}")
+        return
+
+    print("Cargando standings desde Transfermarkt (primera vez)...")
+    total = 0
+    for liga, info in LIGAS.items():
+        for anno in TEMPORADAS:
+            try:
+                equipos = scrape_tabla(info["slug"], info["id"], anno)
+                if equipos:
+                    guardar_standings(liga, anno, equipos)
+                    total += len(equipos)
+                    print(f"  {liga[:35]:<35} {anno}: {len(equipos)} equipos")
+                time.sleep(2.5)
+            except Exception as e:
+                print(f"  Error en {liga} {anno}: {e}")
+                time.sleep(2.5)
+    print(f"OK - {total} registros de standings cargados")
+
 def primera_ejecucion():
     hoy = datetime.now().strftime("%Y-%m-%d")
 
@@ -88,6 +117,7 @@ if __name__ == "__main__":
     print("Inicializando base de datos...")
     crear_tabla()
 
+    cargar_standings_si_vacio()
     primera_ejecucion()
     ejecutar_ciclo()
 
