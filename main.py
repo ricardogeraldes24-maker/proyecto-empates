@@ -12,7 +12,7 @@ from scraper_completo import LIGAS, TEMPORADAS, scrape_tabla
 from db import guardar_standings
 from analyzer import generar_reporte, generar_reporte_manana, MAX_LIGAS, draw_rate_por_liga_tm, _normalizar_liga, _liga_avg_goals
 from notifier import enviar
-from config import UMBRAL_EMPATE, INTERVALO_ALERTA, TIMEZONE_OFFSET, BETSSON_LIGAS, BETSSON_BASE
+from config import UMBRAL_EMPATE, INTERVALO_ALERTA, TIMEZONE_OFFSET, BETSSON_LIGAS
 
 ALERTED_FILE = "alerted.json"
 
@@ -146,9 +146,9 @@ def ejecutar_ciclo(alerted):
                     avg = _liga_avg_goals(liga_norm)
                     if avg:
                         msg += f"\nPromedio goles liga: {avg}"
-                    slug = BETSSON_LIGAS.get(liga_norm)
-                    if slug:
-                        msg += f"\n\nAbrir Betsson:\n{BETSSON_BASE}/{slug}"
+                    url = BETSSON_LIGAS.get(liga_norm)
+                    if url:
+                        msg += f"\n\nAbrir Betsson:\n{url}"
                     else:
                         query = urllib.parse.quote(f"{local} {visit}")
                         msg += f"\n\nBuscar en Betsson:\nhttps://www.betsson.pe/es/apuestas-deportivas/search?query={query}"
