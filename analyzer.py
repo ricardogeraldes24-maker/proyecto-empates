@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from db import conectar, ejecutar
 from config import UMBRAL_EMPATE
@@ -114,7 +114,7 @@ def generar_reporte():
 
     today = hoy.strftime("%Y-%m-%d")
     top_ligas = draw_rate_por_liga_tm()
-    top_nombres = set(l["liga"] for l in top_ligas[:MAX_LIGAS])
+    top_nombres = set(_normalizar_liga(l["liga"]) for l in top_ligas[:MAX_LIGAS])
 
     rows = ejecutar("""
         SELECT fecha, hora, liga, local, visitante, pct_empate
@@ -179,6 +179,73 @@ def generar_reporte():
     lineas.append(f"Reporte: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
 
     return "\n".join(lineas)
+
+def generar_reporte_manana():
+    lineas = []
+    manana = datetime.now() + timedelta(days=1)
+    fecha_str = manana.strftime("%d/%m/%Y")
+    manana_str = manana.strftime("%Y-%m-%d")
+    lineas.append(f"<b>PARTIDOS DE MAÑANA {fecha_str}</b>")
+    lineas.append("")
+
+    top_ligas = draw_rate_por_liga_tm()
+    top_nombres = set(_normalizar_liga(l["liga"]) for l in top_ligas[:MAX_LIGAS])
+
+    rows = ejecutar("""
+        SELECT fecha, hora, liga, local, visitante, pct_empate
+        FROM partidos
+        WHERE fecha = ? AND pct_empate >= ?
+          AND (resultado IS NULL OR resultado = '-' OR resultado = '')
+        ORDER BY pct_empate DESC
+    """, (manana_str, UMBRAL_EMPATE - 10))
+
+    filtrados = [p for p in rows if _normalizar_liga(p[2]) in top_nombres]
+    if filtrados:
+        partidos = sorted(filtrados, key=lambda p: (_hora_min(p[1]), -p[5]))[:MAX_PARTIDOS]
+    else:
+        partidos = sorted(rows, key=lambda p: (_hora_min(p[1]), -p[5]))[:MAX_PARTIDOS]
+
+    if partidos:
+        grupo_act = -1
+        for p in partidos:
+            hora = p[1] if p[1] else "??:??"
+            liga = p[2][:25]
+            pct = p[5]
+
+            liga_norm = _normalizar_liga(p[2])
+            avg_liga = _liga_avg_goals(liga_norm)
+
+            g = _grupo_hora(hora)
+            if g != grupo_act:
+                grupo_act = g
+                lineas.append(f"-- {_NOMBRES_GRUPO[g]} --")
+
+            extra = ""
+            if avg_liga:
+                ok = "OK" if avg_liga < 2.5 else "ALTO"
+                extra = f" <i>[{avg_liga}g {ok}]</i>"
+
+            lineas.append(f"<b>{pct}%</b> {hora}  {liga}{extra}")
+            lineas.append(f"  {p[3]} vs {p[4]}")
+
+        total_filt = len(filtrados)
+        if total_filt:
+            lineas.append("")
+            lineas.append(f"Total: {total_filt} partidos en top ligas")
+    else:
+        lineas.append("  (sin partidos manana)")
+
+    lineas.append("")
+    lineas.append("<b>TOP LIGAS EMPARDORAS</b>")
+    for l in top_ligas[:MAX_LIGAS]:
+        avg = _liga_avg_goals(l["liga"])
+        g_str = f"g{avg}" if avg else "g?"
+        lineas.append(f"  <b>{l['draw_pct']}%</b>  {l['liga'][:35]:<35} <i>{g_str}</i>")
+
+    lineas.append("")
+    lineas.append(f"Preview: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+
+    return "\n".join(lineas) if partidos else None
 
 def _barra(pct):
     if pct >= 40:

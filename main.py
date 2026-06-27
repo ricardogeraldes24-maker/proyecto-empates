@@ -1,85 +1,66 @@
 import time
 import traceback
-from datetime import datetime
+import json
+import os
+from datetime import datetime, timedelta
 
 from db import ejecutar as db_ejecutar
-from database import crear_tabla, guardar_partido, obtener_partidos_sin_resultado, obtener_partidos_futuros
+from database import crear_tabla, guardar_partido
 from scraper import scrape_fecha, scrape_historial
 from scraper_completo import LIGAS, TEMPORADAS, scrape_tabla
 from db import guardar_standings
-from analyzer import generar_reporte
+from analyzer import generar_reporte, generar_reporte_manana, MAX_LIGAS, draw_rate_por_liga_tm, _normalizar_liga, _liga_avg_goals
 from notifier import enviar
-from config import INTERVALO_HORAS, UMBRAL_EMPATE
+from config import UMBRAL_EMPATE, INTERVALO_ALERTA, TIMEZONE_OFFSET
 
-def actualizar_resultados_pendientes():
-    from datetime import timedelta
+ALERTED_FILE = "alerted.json"
+
+def cargar_alerted():
     try:
-        pendientes = obtener_partidos_sin_resultado()
-        if not pendientes:
-            return 0
-        hoy = datetime.now().strftime("%Y-%m-%d")
-        ayer = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-        fechas = set(p["fecha"] for p in pendientes if p["fecha"] in (hoy, ayer))
-        total = 0
-        for f in fechas:
-            try:
-                actualizados = scrape_fecha(f)
-                for p in actualizados:
-                    guardar_partido(p["id"], p["fecha"], p["hora"], p["liga"], p["local"], p["visitante"], p["pct_empate"], p["resultado"])
-                total += len(actualizados)
-                time.sleep(1.5)
-            except Exception as e:
-                print(f"  Error actualizando {f}: {e}")
-        return total
+        with open(ALERTED_FILE) as f:
+            return set(json.load(f))
+    except:
+        return set()
+
+def guardar_alerted(s):
+    try:
+        with open(ALERTED_FILE, "w") as f:
+            json.dump(list(s), f)
     except Exception as e:
-        print(f"  Error en actualizar_resultados_pendientes: {e}")
-        return 0
+        print(f"Error guardando alerted: {e}")
 
-def ejecutar_ciclo():
-    from datetime import timedelta
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
-    print(f"\n--- Ciclo {timestamp} ---")
+def limpiar_alerted(s):
+    if len(s) > 500:
+        nuevos = set(list(s)[-300:])
+        s.clear()
+        s.update(nuevos)
 
+def get_top5_names():
+    top = draw_rate_por_liga_tm()
+    return set(_normalizar_liga(l["liga"]) for l in top[:MAX_LIGAS])
+
+_TOP5_CACHE = {"ts": 0, "names": set()}
+
+def top5_cached():
+    if time.time() - _TOP5_CACHE["ts"] > 1800:
+        _TOP5_CACHE["names"] = get_top5_names()
+        _TOP5_CACHE["ts"] = time.time()
+    return _TOP5_CACHE["names"]
+
+def scrape_hoy_ayer():
     hoy = datetime.now().strftime("%Y-%m-%d")
     ayer = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-
-    nuevos = []
-    try:
-        nuevos = scrape_fecha(hoy)
-        print(f"Partidos de hoy ({hoy}): {len(nuevos)}")
-        for p in nuevos:
-            guardar_partido(p["id"], p["fecha"], p["hora"], p["liga"], p["local"], p["visitante"], p["pct_empate"], p["resultado"])
-    except Exception as e:
-        print(f"Error scraping {hoy}: {e}")
-
-    try:
-        ayer_partidos = scrape_fecha(ayer)
-        for p in ayer_partidos:
-            guardar_partido(p["id"], p["fecha"], p["hora"], p["liga"], p["local"], p["visitante"], p["pct_empate"], p["resultado"])
-        print(f"Resultados de ayer ({ayer}): {len(ayer_partidos)}")
-    except Exception as e:
-        print(f"Error scraping ayer {ayer}: {e}")
-
-    try:
-        actualizados = actualizar_resultados_pendientes()
-        if actualizados:
-            print(f"Resultados actualizados: {actualizados}")
-    except Exception as e:
-        print(f"Error actualizando resultados: {e}")
-
-    reporte = ""
-    try:
-        reporte = generar_reporte()
-    except Exception as e:
-        print(f"Error generando reporte: {e}")
-        reporte = f"--- ERROR ---\nError al generar reporte: {e}"
-
-    print(reporte)
-
-    try:
-        enviar(reporte)
-    except Exception as e:
-        print(f"Error enviando a Telegram: {e}")
+    total = 0
+    for f in [hoy, ayer]:
+        try:
+            partidos = scrape_fecha(f)
+            for p in partidos:
+                guardar_partido(p["id"], p["fecha"], p["hora"], p["liga"], p["local"], p["visitante"], p["pct_empate"], p["resultado"])
+            total += len(partidos)
+            time.sleep(2)
+        except Exception as e:
+            print(f"Error scrapeando {f}: {e}")
+    return total
 
 def cargar_standings_si_vacio():
     try:
@@ -109,7 +90,6 @@ def cargar_standings_si_vacio():
 
 def primera_ejecucion():
     hoy = datetime.now().strftime("%Y-%m-%d")
-
     try:
         partidos_hoy = scrape_fecha(hoy)
         if partidos_hoy:
@@ -126,24 +106,128 @@ def primera_ejecucion():
         print(f"Error en primera ejecucion: {e}")
         traceback.print_exc()
 
+def ejecutar_ciclo(alerted):
+    now = datetime.now()
+    hoy = now.strftime("%Y-%m-%d")
+    manana = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+    top5 = top5_cached()
+
+    ahora_min = now.hour * 60 + now.minute + TIMEZONE_OFFSET
+
+    reports = []
+
+    try:
+        partidos = db_ejecutar("""
+            SELECT id, hora, liga, local, visitante, pct_empate
+            FROM partidos
+            WHERE fecha = ?
+              AND (resultado IS NULL OR resultado = '-' OR resultado = '')
+              AND hora != '' AND hora != '??:??'
+              AND pct_empate >= ?
+        """, (hoy, UMBRAL_EMPATE - 10))
+
+        for r in partidos:
+            mid = r[0]
+            if mid in alerted:
+                continue
+            hora = r[1]
+            liga = r[2]
+            local = r[3]
+            visit = r[4]
+            pct = r[5]
+            liga_norm = _normalizar_liga(liga)
+            if liga_norm not in top5:
+                continue
+            try:
+                parts = hora.split(":")
+                match_min = int(parts[0]) * 60 + int(parts[1])
+                diff = match_min - ahora_min
+                if 9 <= diff <= 11:
+                    msg = (
+                        f"<b>{local}</b> vs <b>{visit}</b>\n"
+                        f"{liga} - {hora}\n"
+                        f"Probabilidad empate: <b>{pct}%</b>"
+                    )
+                    avg = _liga_avg_goals(liga_norm)
+                    if avg:
+                        msg += f"\nPromedio goles liga: {avg}"
+                    reports.append(("ALERTA 10min", msg))
+                    alerted.add(mid)
+                    guardar_alerted(alerted)
+                    print(f"Alerta 10min: {local} vs {visit} ({hora})")
+            except ValueError:
+                continue
+    except Exception as e:
+        print(f"Error alertas: {e}")
+
+    for label, msg in reports:
+        try:
+            enviar(msg)
+        except Exception as e:
+            print(f"Error enviando {label}: {e}")
+
 if __name__ == "__main__":
+    print(f"[{datetime.now()}] Iniciando proyecto-empates...")
     print("Inicializando base de datos...")
-    crear_tabla()
+    try:
+        crear_tabla()
+        print("[OK] Base de datos lista")
+    except Exception as e:
+        print(f"[ERROR] No se pudo crear BD: {e}")
+        raise
 
-    cargar_standings_si_vacio()
-    primera_ejecucion()
-    ejecutar_ciclo()
+    try:
+        cargar_standings_si_vacio()
+    except Exception as e:
+        print(f"[ERROR] standings: {e}")
+        traceback.print_exc()
 
-    print(f"\n*** Modo 24/7 activado. Revisando cada {INTERVALO_HORAS} horas...")
+    try:
+        primera_ejecucion()
+    except Exception as e:
+        print(f"[ERROR] primera_ejecucion: {e}")
+        traceback.print_exc()
+
+    ultima_actualizacion = time.time()
+    preview_enviado = ""
+
+    alerted = cargar_alerted()
+    print(f"[OK] {len(alerted)} match IDs alertados cargados")
+
+    print(f"\n*** Modo 24/7 con alertas 10-min. Revisando cada {INTERVALO_ALERTA}s...")
     while True:
         try:
-            time.sleep(INTERVALO_HORAS * 3600)
+            now = datetime.now()
+            hoy = now.strftime("%Y-%m-%d")
+
+            if time.time() - ultima_actualizacion > 1800:
+                try:
+                    n = scrape_hoy_ayer()
+                    if n:
+                        print(f"Datos actualizados: {n} partidos")
+    ultima_actualizacion = 0
+                except Exception as e:
+                    print(f"Error scrape: {e}")
+
+            if now.hour == 20 and preview_enviado != hoy:
+                try:
+                    preview = generar_reporte_manana()
+                    if preview:
+                        enviar(preview)
+                        print(f"Preview manana enviado ({len(preview)} chars)")
+                    preview_enviado = hoy
+                except Exception as e:
+                    print(f"Error preview: {e}")
+
+            ejecutar_ciclo(alerted)
+            limpiar_alerted(alerted)
+            guardar_alerted(alerted)
+
+            time.sleep(INTERVALO_ALERTA)
         except KeyboardInterrupt:
             print("\nDetenido por el usuario.")
             break
         except Exception as e:
-            print(f"Error en espera: {e}, reintentando en 5 minutos...")
-            time.sleep(300)
-            continue
-
-        ejecutar_ciclo()
+            print(f"Error en loop principal: {e}")
+            traceback.print_exc()
+            time.sleep(60)
