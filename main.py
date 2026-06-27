@@ -2,6 +2,7 @@ import time
 import traceback
 import json
 import os
+import urllib.parse
 from datetime import datetime, timedelta
 
 from db import ejecutar as db_ejecutar
@@ -145,6 +146,8 @@ def ejecutar_ciclo(alerted):
                     avg = _liga_avg_goals(liga_norm)
                     if avg:
                         msg += f"\nPromedio goles liga: {avg}"
+                    query = urllib.parse.quote(f"{local} {visit}")
+                    msg += f"\n\nAbrir Betsson:\nhttps://www.betsson.pe/es/apuestas-deportivas/search?query={query}"
                     reports.append(("ALERTA 10min", msg))
                     alerted.add(mid)
                     guardar_alerted(alerted)
