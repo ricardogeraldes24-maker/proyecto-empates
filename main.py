@@ -35,11 +35,11 @@ def limpiar_alerted(s):
         s.clear()
         s.update(nuevos)
 
+_TOP5_CACHE = {"ts": 0, "names": set()}
+
 def get_top5_names():
     top = draw_rate_por_liga_tm()
     return set(_normalizar_liga(l["liga"]) for l in top[:MAX_LIGAS])
-
-_TOP5_CACHE = {"ts": 0, "names": set()}
 
 def top5_cached():
     if time.time() - _TOP5_CACHE["ts"] > 1800:
@@ -71,7 +71,6 @@ def cargar_standings_si_vacio():
     except Exception as e:
         print(f"Error verificando standings: {e}")
         return
-
     print("Cargando standings desde Transfermarkt (primera vez)...")
     total = 0
     for liga, info in LIGAS.items():
@@ -109,13 +108,9 @@ def primera_ejecucion():
 def ejecutar_ciclo(alerted):
     now = datetime.now()
     hoy = now.strftime("%Y-%m-%d")
-    manana = (now + timedelta(days=1)).strftime("%Y-%m-%d")
     top5 = top5_cached()
-
     ahora_min = now.hour * 60 + now.minute + TIMEZONE_OFFSET
-
     reports = []
-
     try:
         partidos = db_ejecutar("""
             SELECT id, hora, liga, local, visitante, pct_empate
@@ -125,7 +120,6 @@ def ejecutar_ciclo(alerted):
               AND hora != '' AND hora != '??:??'
               AND pct_empate >= ?
         """, (hoy, UMBRAL_EMPATE - 10))
-
         for r in partidos:
             mid = r[0]
             if mid in alerted:
@@ -159,7 +153,6 @@ def ejecutar_ciclo(alerted):
                 continue
     except Exception as e:
         print(f"Error alertas: {e}")
-
     for label, msg in reports:
         try:
             enviar(msg)
@@ -167,65 +160,42 @@ def ejecutar_ciclo(alerted):
             print(f"Error enviando {label}: {e}")
 
 if __name__ == "__main__":
-    print(f"[{datetime.now()}] Iniciando proyecto-empates...")
-    print("Inicializando base de datos...")
-    try:
-        crear_tabla()
-        print("[OK] Base de datos lista")
-    except Exception as e:
-        print(f"[ERROR] No se pudo crear BD: {e}")
-        raise
-
-    try:
-        cargar_standings_si_vacio()
-    except Exception as e:
-        print(f"[ERROR] standings: {e}")
-        traceback.print_exc()
-
-    try:
-        primera_ejecucion()
-    except Exception as e:
-        print(f"[ERROR] primera_ejecucion: {e}")
-        traceback.print_exc()
-
-    ultima_actualizacion = time.time()
+    print("Iniciando...")
+    crear_tabla()
+    cargar_standings_si_vacio()
+    primera_ejecucion()
+    ultima_actualizacion = 0
     preview_enviado = ""
-
     alerted = cargar_alerted()
-    print(f"[OK] {len(alerted)} match IDs alertados cargados")
-
-    print(f"\n*** Modo 24/7 con alertas 10-min. Revisando cada {INTERVALO_ALERTA}s...")
+    print(f"Alertes cargades: {len(alerted)}")
+    print(f"*** Mod 24/7 amb alertes 10-min. Revisant cada {INTERVALO_ALERTA}s...")
     while True:
         try:
             now = datetime.now()
             hoy = now.strftime("%Y-%m-%d")
-
             if time.time() - ultima_actualizacion > 1800:
                 try:
                     n = scrape_hoy_ayer()
                     if n:
-                        print(f"Datos actualizados: {n} partidos")
+                        print(f"Dades actualitzades: {n} partits")
                     ultima_actualizacion = time.time()
                 except Exception as e:
                     print(f"Error scrape: {e}")
-
             if now.hour == 20 and preview_enviado != hoy:
                 try:
                     preview = generar_reporte_manana()
                     if preview:
                         enviar(preview)
-                        print(f"Preview manana enviado ({len(preview)} chars)")
+                        print(f"Preview dem. enviat ({len(preview)} chars)")
                     preview_enviado = hoy
                 except Exception as e:
                     print(f"Error preview: {e}")
-
             ejecutar_ciclo(alerted)
             limpiar_alerted(alerted)
             guardar_alerted(alerted)
-
             time.sleep(INTERVALO_ALERTA)
         except KeyboardInterrupt:
-            print("\nDetenido por el usuario.")
+            print("Aturat per l'usuari.")
             break
         except Exception as e:
             print(f"Error en loop principal: {e}")
