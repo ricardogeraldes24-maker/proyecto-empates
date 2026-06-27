@@ -2,7 +2,6 @@ import time
 import traceback
 import json
 import os
-import urllib.parse
 from datetime import datetime, timedelta
 
 from db import ejecutar as db_ejecutar
@@ -12,7 +11,7 @@ from scraper_completo import LIGAS, TEMPORADAS, scrape_tabla
 from db import guardar_standings
 from analyzer import generar_reporte, generar_reporte_manana, MAX_LIGAS, draw_rate_por_liga_tm, _normalizar_liga, _liga_avg_goals
 from notifier import enviar
-from config import UMBRAL_EMPATE, INTERVALO_ALERTA, TIMEZONE_OFFSET
+from config import UMBRAL_EMPATE, INTERVALO_ALERTA, TIMEZONE_OFFSET, BETSSON_LIGAS, BETSSON_BASE
 
 ALERTED_FILE = "alerted.json"
 
@@ -146,8 +145,9 @@ def ejecutar_ciclo(alerted):
                     avg = _liga_avg_goals(liga_norm)
                     if avg:
                         msg += f"\nPromedio goles liga: {avg}"
-                    query = urllib.parse.quote(f"{local} {visit}")
-                    msg += f"\n\nAbrir Betsson:\nhttps://www.betsson.pe/es/apuestas-deportivas/search?query={query}"
+                    slug = BETSSON_LIGAS.get(liga_norm)
+                    if slug:
+                        msg += f"\n\nAbrir Betsson:\n{BETSSON_BASE}/{slug}"
                     reports.append(("ALERTA 10min", msg))
                     alerted.add(mid)
                     guardar_alerted(alerted)
