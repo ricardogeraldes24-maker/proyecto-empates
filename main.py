@@ -12,11 +12,14 @@ from notifier import enviar
 from config import INTERVALO_HORAS, UMBRAL_EMPATE
 
 def actualizar_resultados_pendientes():
+    from datetime import timedelta
     try:
         pendientes = obtener_partidos_sin_resultado()
         if not pendientes:
             return 0
-        fechas = set(p["fecha"] for p in pendientes)
+        hoy = datetime.now().strftime("%Y-%m-%d")
+        ayer = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        fechas = set(p["fecha"] for p in pendientes if p["fecha"] in (hoy, ayer))
         total = 0
         for f in fechas:
             try:
@@ -33,10 +36,12 @@ def actualizar_resultados_pendientes():
         return 0
 
 def ejecutar_ciclo():
+    from datetime import timedelta
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
     print(f"\n--- Ciclo {timestamp} ---")
 
     hoy = datetime.now().strftime("%Y-%m-%d")
+    ayer = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
     nuevos = []
     try:
@@ -46,6 +51,14 @@ def ejecutar_ciclo():
             guardar_partido(p["id"], p["fecha"], p["hora"], p["liga"], p["local"], p["visitante"], p["pct_empate"], p["resultado"])
     except Exception as e:
         print(f"Error scraping {hoy}: {e}")
+
+    try:
+        ayer_partidos = scrape_fecha(ayer)
+        for p in ayer_partidos:
+            guardar_partido(p["id"], p["fecha"], p["hora"], p["liga"], p["local"], p["visitante"], p["pct_empate"], p["resultado"])
+        print(f"Resultados de ayer ({ayer}): {len(ayer_partidos)}")
+    except Exception as e:
+        print(f"Error scraping ayer {ayer}: {e}")
 
     try:
         actualizados = actualizar_resultados_pendientes()
