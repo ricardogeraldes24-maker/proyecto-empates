@@ -2,6 +2,7 @@ import time
 import traceback
 import json
 import os
+import urllib.parse
 from datetime import datetime, timedelta
 
 from db import ejecutar as db_ejecutar
@@ -148,6 +149,9 @@ def ejecutar_ciclo(alerted):
                     slug = BETSSON_LIGAS.get(liga_norm)
                     if slug:
                         msg += f"\n\nAbrir Betsson:\n{BETSSON_BASE}/{slug}"
+                    else:
+                        query = urllib.parse.quote(f"{local} {visit}")
+                        msg += f"\n\nBuscar en Betsson:\nhttps://www.betsson.pe/es/apuestas-deportivas/search?query={query}"
                     reports.append(("ALERTA 10min", msg))
                     alerted.add(mid)
                     guardar_alerted(alerted)
