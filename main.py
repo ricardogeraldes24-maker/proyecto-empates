@@ -205,7 +205,7 @@ if __name__ == "__main__":
                     n = scrape_hoy_ayer()
                     if n:
                         print(f"Datos actualizados: {n} partidos")
-    ultima_actualizacion = 0
+                    ultima_actualizacion = time.time()
                 except Exception as e:
                     print(f"Error scrape: {e}")
 
