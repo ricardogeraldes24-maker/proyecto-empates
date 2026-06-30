@@ -3,14 +3,14 @@ import traceback
 import json
 import os
 import urllib.parse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from db import ejecutar as db_ejecutar
 from database import crear_tabla, guardar_partido
 from scraper import scrape_fecha, scrape_historial
 from scraper_completo import LIGAS, TEMPORADAS, scrape_tabla
 from db import guardar_standings
-from analyzer import generar_reporte, generar_reporte_manana, MAX_LIGAS, draw_rate_por_liga_tm, _normalizar_liga, _liga_avg_goals
+from analyzer import generar_reporte, generar_reporte_manana, generar_stats_aciertos, MAX_LIGAS, top_ligas_con_stats, _normalizar_liga, _liga_avg_goals, obtener_umbral_dinamico
 from notifier import enviar
 from config import UMBRAL_EMPATE, INTERVALO_ALERTA, TIMEZONE_OFFSET, BETSSON_LIGAS
 
@@ -39,7 +39,7 @@ def limpiar_alerted(s):
 _TOP5_CACHE = {"ts": 0, "names": set()}
 
 def get_top5_names():
-    top = draw_rate_por_liga_tm()
+    top = top_ligas_con_stats(ponderado=True)
     return set(_normalizar_liga(l["liga"]) for l in top[:MAX_LIGAS])
 
 def top5_cached():
@@ -113,6 +113,7 @@ def ejecutar_ciclo(alerted):
     ahora_min = now.hour * 60 + now.minute + TIMEZONE_OFFSET
     reports = []
     try:
+        umbral_alertas = obtener_umbral_dinamico(hoy, minimo=3)
         partidos = db_ejecutar("""
             SELECT id, hora, liga, local, visitante, pct_empate
             FROM partidos
@@ -120,7 +121,7 @@ def ejecutar_ciclo(alerted):
               AND (resultado IS NULL OR resultado = '-' OR resultado = '')
               AND hora != '' AND hora != '??:??'
               AND pct_empate >= ?
-        """, (hoy, UMBRAL_EMPATE - 10))
+        """, (hoy, umbral_alertas))
         for r in partidos:
             mid = r[0]
             if mid in alerted:
@@ -188,12 +189,17 @@ if __name__ == "__main__":
                     ultima_actualizacion = time.time()
                 except Exception as e:
                     print(f"Error scrape: {e}")
-            if now.hour == 20 and preview_enviado != hoy:
+            peru_tz = timezone(timedelta(hours=-5))
+            if datetime.now(peru_tz).hour == 20 and preview_enviado != hoy:
                 try:
                     preview = generar_reporte_manana()
                     if preview:
                         enviar(preview)
                         print(f"Preview dem. enviat ({len(preview)} chars)")
+                    stats = generar_stats_aciertos(dias=7)
+                    if stats:
+                        enviar(stats)
+                        print(f"Stats enviades")
                     preview_enviado = hoy
                 except Exception as e:
                     print(f"Error preview: {e}")

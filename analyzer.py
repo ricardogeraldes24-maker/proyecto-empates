@@ -1,7 +1,8 @@
+import urllib.parse
 from datetime import datetime, timedelta
 
 from db import conectar, ejecutar
-from config import UMBRAL_EMPATE
+from config import UMBRAL_EMPATE, BETSSON_LIGAS, BETSSON_BASE
 
 LIGAS_TM = {
     "SOUTH KOREA - K3 LEAGUE": "K3L",
@@ -21,11 +22,15 @@ LIGAS_TM = {
     "USA - USL CHAMPIONSHIP": "USL",
     "MOROCCO - BOTOLA PRO": "MAR1",
     "LATVIA - VIRSLIGA": "LET1",
+    "BRAZIL - SERIE C": "BRA3",
+    "REP. OF IRELAND - PREMIER DIVISION": "IRL1",
+    "FINLAND - YKKOSLIIGA": "FI2",
 }
 
 LIGA_ALIAS = {
     "ARGENTINA - PRIMERA B METROPOLITANA": "ARGENTINA - PRIMERA B",
     "KAZAKHSTAN - PREMIER LEAGUE": "KAZAKHSTAN - PREMIER LIGA",
+    "BRAZIL - BRASILEIRO SERIE C": "BRAZIL - SERIE C",
 }
 
 def _normalizar_liga(name):
@@ -55,15 +60,20 @@ def _liga_avg_goals(liga_nombre):
     if rows and rows[0][0] is not None and rows[0][0] > 0:
         return rows[0][0]
     rows = ejecutar("""
-        SELECT AVG(goles) FROM (
-            SELECT CAST(SUBSTR(resultado, 1, INSTR(resultado, '-')-1) AS INTEGER) +
-                   CAST(SUBSTR(resultado, INSTR(resultado, '-')+1) AS INTEGER) as goles
-            FROM partidos
-            WHERE liga LIKE ? AND resultado IS NOT NULL AND resultado != '-' AND resultado LIKE '%-%'
-        )
+        SELECT resultado FROM partidos
+        WHERE liga LIKE ? AND resultado IS NOT NULL
+          AND resultado != '-' AND resultado LIKE '%-%'
     """, (f"%{liga_nombre[:30]}%",))
-    if rows and rows[0][0] is not None:
-        return round(rows[0][0], 2)
+    if rows:
+        goles = []
+        for r in rows:
+            try:
+                partes = r[0].split("-")
+                goles.append(int(partes[0]) + int(partes[1]))
+            except (ValueError, IndexError):
+                pass
+        if goles:
+            return round(sum(goles) / len(goles), 2)
     return None
 
 def datos_equipo(equipo_nombre):
@@ -81,6 +91,7 @@ def datos_equipo(equipo_nombre):
 
 MAX_PARTIDOS = 20
 MAX_LIGAS = 5
+MIN_PARTIDOS_POR_LIGA = 3
 
 def _hora_min(hora):
     if not hora or hora == "??:??":
@@ -105,7 +116,124 @@ def _grupo_hora(hora):
 
 _NOMBRES_GRUPO = ["Madrugada", "Mañana", "Tarde", "Noche"]
 
-def generar_reporte():
+def obtener_umbral_dinamico(fecha=None, minimo=MAX_PARTIDOS):
+    umbral = UMBRAL_EMPATE
+    while umbral >= 15:
+        if fecha:
+            rows = ejecutar("""
+                SELECT COUNT(*) FROM partidos
+                WHERE fecha = ? AND pct_empate >= ?
+                  AND (resultado IS NULL OR resultado = '-' OR resultado = '')
+            """, (fecha, umbral))
+        else:
+            rows = ejecutar("""
+                SELECT COUNT(*) FROM partidos
+                WHERE pct_empate >= ?
+                  AND (resultado IS NULL OR resultado = '-' OR resultado = '')
+            """, (umbral,))
+        if rows and rows[0][0] >= minimo:
+            return umbral
+        umbral -= 5
+    return 15
+
+def top_ligas_ponderado(max_ligas=MAX_LIGAS):
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    manana = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    hist_rows = ejecutar("""
+        SELECT liga, SUM(pj) as total_pj, SUM(e) as total_e,
+               ROUND(100.0 * SUM(e) / NULLIF(SUM(pj), 0), 1) as draw_pct,
+               ROUND(2.0 * SUM(gf) / NULLIF(SUM(pj), 0), 2) as avg_goals
+        FROM standings
+        GROUP BY liga
+        HAVING SUM(pj) >= 50
+    """)
+
+    upcoming = ejecutar("""
+        SELECT liga, COUNT(*) as cnt, ROUND(AVG(pct_empate), 1) as avg_x
+        FROM partidos
+        WHERE fecha IN (?, ?)
+          AND (resultado IS NULL OR resultado = '-' OR resultado = '')
+          AND pct_empate >= 20
+        GROUP BY liga
+    """, (hoy, manana))
+
+    upcoming_dict = {}
+    for r in upcoming:
+        norm = _normalizar_liga(r[0])
+        upcoming_dict[norm] = {"cnt": r[1], "avg_x": r[2]}
+
+    scores = []
+    for r in hist_rows:
+        name = r[0]
+        norm = _normalizar_liga(name)
+        draw_pct = r[3]
+        avg_goals = r[4] if r[4] else 3.0
+
+        up = upcoming_dict.get(norm, {"cnt": 0, "avg_x": 0})
+        avail = up["cnt"]
+        avg_x = up["avg_x"]
+
+        draw_score = draw_pct * 2
+        goals_score = max(0, (2.5 - avg_goals) * 10)
+        statarea_score = avg_x * 0.8
+        avail_score = min(avail, 10) * 2
+
+        score = draw_score + goals_score + statarea_score + avail_score
+
+        scores.append({
+            "liga": name, "draw_pct": draw_pct, "avg_goals": avg_goals,
+            "avg_statarea_x": avg_x, "available": avail, "score": round(score, 1)
+        })
+
+    scores.sort(key=lambda x: x["score"], reverse=True)
+    return scores[:max_ligas]
+
+def top_ligas_con_stats(ponderado=True):
+    if ponderado:
+        return top_ligas_ponderado()
+    return draw_rate_por_liga_tm()
+
+def generar_stats_aciertos(dias=7, umbral=25):
+    desde = (datetime.now() - timedelta(days=dias)).strftime("%Y-%m-%d")
+    rows = ejecutar("""
+        SELECT COUNT(*) as total,
+               SUM(CASE WHEN fue_empate = 1 THEN 1 ELSE 0 END) as aciertos,
+               ROUND(100.0 * SUM(CASE WHEN fue_empate = 1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1) as pct
+        FROM partidos
+        WHERE fue_empate IS NOT NULL AND fecha >= ? AND pct_empate >= ?
+    """, (desde, umbral))
+
+    rows_liga = ejecutar("""
+        SELECT liga, COUNT(*) as total,
+               SUM(CASE WHEN fue_empate = 1 THEN 1 ELSE 0 END) as aciertos,
+               ROUND(100.0 * SUM(CASE WHEN fue_empate = 1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1) as pct
+        FROM partidos
+        WHERE fue_empate IS NOT NULL AND fecha >= ? AND pct_empate >= ?
+        GROUP BY liga HAVING COUNT(*) >= 3
+        ORDER BY pct DESC
+    """, (desde, umbral))
+
+    lineas = []
+    hoy = datetime.now()
+    fecha_str = hoy.strftime("%d/%m/%Y")
+    lineas.append(f"<b>ESTADISTICAS {dias} DIAS ({fecha_str})</b>")
+    lineas.append("")
+
+    r = rows[0] if rows else (0, 0, 0)
+    lineas.append(f"Total: <b>{r[1]}/{r[0]}</b>  <b>{r[2]}%</b> aciertos (umbral >= {umbral}%)")
+    lineas.append("")
+
+    if rows_liga:
+        lineas.append("<b>Por liga:</b>")
+        for l in rows_liga[:MAX_LIGAS]:
+            lineas.append(f"  <b>{l[3]}%</b>  {l[1]}/{l[0]}  {l[2]}")
+    else:
+        lineas.append("(sin datos suficientes aun)")
+
+    return "\n".join(lineas)
+
+def generar_reporte(ponderado=True):
     lineas = []
     hoy = datetime.now()
     fecha_str = hoy.strftime("%d/%m/%Y")
@@ -113,8 +241,10 @@ def generar_reporte():
     lineas.append("")
 
     today = hoy.strftime("%Y-%m-%d")
-    top_ligas = draw_rate_por_liga_tm()
-    top_nombres = set(_normalizar_liga(l["liga"]) for l in top_ligas[:MAX_LIGAS])
+    top = top_ligas_con_stats(ponderado)
+    top_nombres = set(_normalizar_liga(l["liga"]) for l in top[:MAX_LIGAS])
+
+    umbral = obtener_umbral_dinamico(today)
 
     rows = ejecutar("""
         SELECT fecha, hora, liga, local, visitante, pct_empate
@@ -122,7 +252,7 @@ def generar_reporte():
         WHERE fecha = ? AND pct_empate >= ?
           AND (resultado IS NULL OR resultado = '-' OR resultado = '')
         ORDER BY pct_empate DESC
-    """, (today, UMBRAL_EMPATE - 10))
+    """, (today, umbral))
 
     if not rows:
         rows = ejecutar("""
@@ -131,7 +261,7 @@ def generar_reporte():
             WHERE pct_empate >= ?
               AND (resultado IS NULL OR resultado = '-' OR resultado = '')
             ORDER BY pct_empate DESC
-        """, (UMBRAL_EMPATE - 10,))
+        """, (umbral,))
 
     filtrados = [p for p in rows if _normalizar_liga(p[2]) in top_nombres]
     if filtrados:
@@ -164,23 +294,30 @@ def generar_reporte():
 
             lineas.append(f"<b>{pct}%</b> {hora}  {liga}{extra}")
             lineas.append(f"  {local} vs {visitante}")
+            url = BETSSON_LIGAS.get(liga_norm)
+            if url:
+                lineas.append(f"  <a href='{url}'>Betsson</a>")
+            else:
+                q = urllib.parse.quote(f"{local} {visitante}")
+                lineas.append(f"  <a href='{BETSSON_BASE}/search?query={q}'>Buscar Betsson</a>")
     else:
         lineas.append("  (sin partidos proximamente)")
 
     lineas.append("")
+    lineas.append(f"<i>Umbral usado: {umbral}%</i>")
+    lineas.append("")
     lineas.append("<b>TOP LIGAS EMPARDORAS</b>")
-    top_ligas = draw_rate_por_liga_tm()
-    for l in top_ligas[:MAX_LIGAS]:
+    for l in top[:MAX_LIGAS]:
         avg = _liga_avg_goals(l["liga"])
         g_str = f"g{avg}" if avg else "g?"
-        lineas.append(f"  <b>{l['draw_pct']}%</b>  {l['liga'][:35]:<35} <i>{g_str}</i>")
+        lineas.append(f"  <b>{l['score']}</b>  {l['liga'][:35]:<35}  <i>{l['draw_pct']}% {g_str}</i>")
 
     lineas.append("")
     lineas.append(f"Reporte: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
 
     return "\n".join(lineas)
 
-def generar_reporte_manana():
+def generar_reporte_manana(ponderado=True):
     lineas = []
     manana = datetime.now() + timedelta(days=1)
     fecha_str = manana.strftime("%d/%m/%Y")
@@ -188,8 +325,10 @@ def generar_reporte_manana():
     lineas.append(f"<b>PARTIDOS DE MAÑANA {fecha_str}</b>")
     lineas.append("")
 
-    top_ligas = draw_rate_por_liga_tm()
-    top_nombres = set(_normalizar_liga(l["liga"]) for l in top_ligas[:MAX_LIGAS])
+    top = top_ligas_con_stats(ponderado)
+    top_nombres = set(_normalizar_liga(l["liga"]) for l in top[:MAX_LIGAS])
+
+    umbral = obtener_umbral_dinamico(manana_str)
 
     rows = ejecutar("""
         SELECT fecha, hora, liga, local, visitante, pct_empate
@@ -197,7 +336,7 @@ def generar_reporte_manana():
         WHERE fecha = ? AND pct_empate >= ?
           AND (resultado IS NULL OR resultado = '-' OR resultado = '')
         ORDER BY pct_empate DESC
-    """, (manana_str, UMBRAL_EMPATE - 10))
+    """, (manana_str, umbral))
 
     filtrados = [p for p in rows if _normalizar_liga(p[2]) in top_nombres]
     if filtrados:
@@ -210,6 +349,8 @@ def generar_reporte_manana():
         for p in partidos:
             hora = p[1] if p[1] else "??:??"
             liga = p[2][:25]
+            local = p[3]
+            visitante = p[4]
             pct = p[5]
 
             liga_norm = _normalizar_liga(p[2])
@@ -226,7 +367,13 @@ def generar_reporte_manana():
                 extra = f" <i>[{avg_liga}g {ok}]</i>"
 
             lineas.append(f"<b>{pct}%</b> {hora}  {liga}{extra}")
-            lineas.append(f"  {p[3]} vs {p[4]}")
+            lineas.append(f"  {local} vs {visitante}")
+            url = BETSSON_LIGAS.get(liga_norm)
+            if url:
+                lineas.append(f"  <a href='{url}'>Betsson</a>")
+            else:
+                q = urllib.parse.quote(f"{local} {visitante}")
+                lineas.append(f"  <a href='{BETSSON_BASE}/search?query={q}'>Buscar Betsson</a>")
 
         total_filt = len(filtrados)
         if total_filt:
@@ -236,11 +383,13 @@ def generar_reporte_manana():
         lineas.append("  (sin partidos manana)")
 
     lineas.append("")
-    lineas.append("<b>TOP LIGAS EMPARDORAS</b>")
-    for l in top_ligas[:MAX_LIGAS]:
+    lineas.append(f"<i>Umbral usado: {umbral}%</i>")
+    lineas.append("")
+    lineas.append("<b>TOP LIGAS PONDERADAS</b>")
+    for l in top[:MAX_LIGAS]:
         avg = _liga_avg_goals(l["liga"])
         g_str = f"g{avg}" if avg else "g?"
-        lineas.append(f"  <b>{l['draw_pct']}%</b>  {l['liga'][:35]:<35} <i>{g_str}</i>")
+        lineas.append(f"  <b>{l['score']}</b>  {l['liga'][:35]:<35}  <i>{l['draw_pct']}% {g_str}</i>")
 
     lineas.append("")
     lineas.append(f"Preview: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
@@ -261,3 +410,5 @@ def _barra(pct):
 
 if __name__ == "__main__":
     print(generar_reporte())
+    print()
+    print(generar_stats_aciertos())

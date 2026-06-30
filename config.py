@@ -15,7 +15,7 @@ BETSSON_BASE = "https://www.betsson.pe/es/apuestas-deportivas/futbol"
 
 BETSSON_LIGAS = {
     "ARGENTINA - PRIMERA NACIONAL": "https://www.betsson.pe/es/apuestas-deportivas/futbol/argentina/argentina-primera-nacional",
-    "ARGENTINA - PRIMERA B METROPOLITANA": "https://www.betsson.pe/es/apuestas-deportivas/futbol/argentina/argentina-primera-b-metropolitana",
+    "ARGENTINA - PRIMERA B": "https://www.betsson.pe/es/apuestas-deportivas/futbol/argentina/argentina-primera-b-metropolitana",
     "BRAZIL - SERIE B": "https://www.betsson.pe/es/apuestas-deportivas/futbol/brasil/serie-b",
     "BRAZIL - SERIE C": "https://www.betsson.pe/es/apuestas-deportivas/futbol/brasil/serie-c",
     "MOROCCO - BOTOLA PRO": "https://www.betsson.pe/es/apuestas-deportivas/futbol/marruecos/marruecos-botala-pro-1",
@@ -27,4 +27,5 @@ BETSSON_LIGAS = {
     "NORWAY - 1. DIVISION": "https://www.betsson.pe/es/apuestas-deportivas/futbol/noruega/obos-ligaen",
     "USA - USL CHAMPIONSHIP": "https://www.betsson.pe/es/apuestas-deportivas/futbol/usa/eeuu-campeonato-usl",
     "LATVIA - VIRSLIGA": "https://www.betsson.pe/es/apuestas-deportivas/futbol/letonia/virsliga-letonia",
+    "REP. OF IRELAND - PREMIER DIVISION": "https://www.betsson.pe/es/apuestas-deportivas/futbol/irlanda/league-of-ireland-premier",
 }
