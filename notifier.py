@@ -24,4 +24,4 @@ async def enviar_mensaje(texto):
     return ok
 
 def enviar(texto):
-    asyncio.run(enviar_mensaje(texto))
+    return asyncio.run(enviar_mensaje(texto))
