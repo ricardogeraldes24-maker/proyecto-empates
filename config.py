@@ -29,3 +29,5 @@ BETSSON_LIGAS = {
     "LATVIA - VIRSLIGA": "https://www.betsson.pe/es/apuestas-deportivas/futbol/letonia/virsliga-letonia",
     "REP. OF IRELAND - PREMIER DIVISION": "https://www.betsson.pe/es/apuestas-deportivas/futbol/irlanda/league-of-ireland-premier",
 }
+
+BETSSON_VERIFIED = set(BETSSON_LIGAS.keys())

@@ -39,7 +39,7 @@ def limpiar_alerted(s):
 _TOP5_CACHE = {"ts": 0, "names": set()}
 
 def get_top5_names():
-    top = top_ligas_con_stats(ponderado=True)
+    top = top_ligas_con_stats(ponderado=True, betsson_only=True)
     return set(_normalizar_liga(l["liga"]) for l in top[:MAX_LIGAS])
 
 def top5_cached():
@@ -189,20 +189,21 @@ if __name__ == "__main__":
                     ultima_actualizacion = time.time()
                 except Exception as e:
                     print(f"Error scrape: {e}")
-            peru_tz = timezone(timedelta(hours=-5))
-            if datetime.now(peru_tz).hour == 20 and preview_enviado != hoy:
-                try:
-                    preview = generar_reporte_manana()
-                    if preview:
-                        enviar(preview)
-                        print(f"Preview dem. enviat ({len(preview)} chars)")
-                    stats = generar_stats_aciertos(dias=7)
-                    if stats:
-                        enviar(stats)
-                        print(f"Stats enviades")
-                    preview_enviado = hoy
-                except Exception as e:
-                    print(f"Error preview: {e}")
+            if preview_enviado != hoy:
+                peru_tz = timezone(timedelta(hours=-5))
+                if datetime.now(peru_tz).hour == 20:
+                    try:
+                        preview = generar_reporte_manana(betsson_only=True)
+                        if preview:
+                            enviar(preview)
+                            print(f"Preview dem. enviat ({len(preview)} chars)")
+                        stats = generar_stats_aciertos(dias=7)
+                        if stats:
+                            enviar(stats)
+                            print(f"Stats enviades")
+                        preview_enviado = hoy
+                    except Exception as e:
+                        print(f"Error preview: {e}")
             ejecutar_ciclo(alerted)
             limpiar_alerted(alerted)
             guardar_alerted(alerted)

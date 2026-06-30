@@ -2,7 +2,7 @@ import urllib.parse
 from datetime import datetime, timedelta
 
 from db import conectar, ejecutar
-from config import UMBRAL_EMPATE, BETSSON_LIGAS, BETSSON_BASE
+from config import UMBRAL_EMPATE, BETSSON_LIGAS, BETSSON_BASE, BETSSON_VERIFIED
 
 LIGAS_TM = {
     "SOUTH KOREA - K3 LEAGUE": "K3L",
@@ -136,7 +136,7 @@ def obtener_umbral_dinamico(fecha=None, minimo=MAX_PARTIDOS):
         umbral -= 5
     return 15
 
-def top_ligas_ponderado(max_ligas=MAX_LIGAS):
+def top_ligas_ponderado(max_ligas=MAX_LIGAS, betsson_only=True):
     hoy = datetime.now().strftime("%Y-%m-%d")
     manana = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -167,6 +167,8 @@ def top_ligas_ponderado(max_ligas=MAX_LIGAS):
     for r in hist_rows:
         name = r[0]
         norm = _normalizar_liga(name)
+        if betsson_only and norm not in BETSSON_VERIFIED:
+            continue
         draw_pct = r[3]
         avg_goals = r[4] if r[4] else 3.0
 
@@ -189,9 +191,9 @@ def top_ligas_ponderado(max_ligas=MAX_LIGAS):
     scores.sort(key=lambda x: x["score"], reverse=True)
     return scores[:max_ligas]
 
-def top_ligas_con_stats(ponderado=True):
+def top_ligas_con_stats(ponderado=True, betsson_only=True):
     if ponderado:
-        return top_ligas_ponderado()
+        return top_ligas_ponderado(betsson_only=betsson_only)
     return draw_rate_por_liga_tm()
 
 def generar_stats_aciertos(dias=7, umbral=25):
@@ -233,7 +235,7 @@ def generar_stats_aciertos(dias=7, umbral=25):
 
     return "\n".join(lineas)
 
-def generar_reporte(ponderado=True):
+def generar_reporte(ponderado=True, betsson_only=True):
     lineas = []
     hoy = datetime.now()
     fecha_str = hoy.strftime("%d/%m/%Y")
@@ -241,7 +243,7 @@ def generar_reporte(ponderado=True):
     lineas.append("")
 
     today = hoy.strftime("%Y-%m-%d")
-    top = top_ligas_con_stats(ponderado)
+    top = top_ligas_con_stats(ponderado, betsson_only=betsson_only)
     top_nombres = set(_normalizar_liga(l["liga"]) for l in top[:MAX_LIGAS])
 
     umbral = obtener_umbral_dinamico(today)
@@ -317,7 +319,7 @@ def generar_reporte(ponderado=True):
 
     return "\n".join(lineas)
 
-def generar_reporte_manana(ponderado=True):
+def generar_reporte_manana(ponderado=True, betsson_only=True):
     lineas = []
     manana = datetime.now() + timedelta(days=1)
     fecha_str = manana.strftime("%d/%m/%Y")
@@ -325,7 +327,7 @@ def generar_reporte_manana(ponderado=True):
     lineas.append(f"<b>PARTIDOS DE MAÑANA {fecha_str}</b>")
     lineas.append("")
 
-    top = top_ligas_con_stats(ponderado)
+    top = top_ligas_con_stats(ponderado, betsson_only=betsson_only)
     top_nombres = set(_normalizar_liga(l["liga"]) for l in top[:MAX_LIGAS])
 
     umbral = obtener_umbral_dinamico(manana_str)
@@ -409,6 +411,6 @@ def _barra(pct):
         return " "
 
 if __name__ == "__main__":
-    print(generar_reporte())
+    print(generar_reporte(betsson_only=False))
     print()
     print(generar_stats_aciertos())
